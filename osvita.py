@@ -11,7 +11,9 @@ import multiprocessing
 import threading
 import logging
 import argparse
+import datetime
 
+_ = lambda x: x
 
 #sys.stdout = codecs.getwriter("cp1251")(sys.stdout, errors='replace')
 
@@ -155,17 +157,26 @@ def get_kg_orders(kd_id):
 			queues[year][age] = orders_sorted_queueNumber
 	return queues 	
 
-def find_order_in_kg_orders(my_order, orders_for_year_and_age):
+def find_order_in_kg_orders(my_order, orders_for_year_and_age, current_kg_id):
 	log_debug('find_order_in_kg_orders', u'find_order_in_kg_orders(%s, orders_for_year_and_age[%d])', my_order[u'child'][u'birthCertificate'][u'number'], len(orders_for_year_and_age))
 	for year, orders_for_age in orders_for_year_and_age.iteritems():
 		for age, orders_by_queue_number in orders_for_age.iteritems():
-			for index, order in enumerate(orders_by_queue_number):
-				if my_order[u'statuses'][-1][u'name'] != u'removed' and\
-					my_order[u'child'][u'birthCertificate'][u'number'] == order[u'child'][u'birthCertificate'][u'number'] and\
-					my_order[u'registrationNumber'] == order[u'registrationNumber']:
-					return True, year, age, index+1, order
+			accepted  = 0
+			pending = 0
+			for index, order in enumerate(orders_by_queue_number, 1):
+				if my_order[u'statuses'][-1][u'name'] != u'removed':
+					if u"invite" in order:
+						if order[u"invite"][u'isInviteAccepted'] == True:
+							accepted += 1;		
+						if order[u"invite"][u'isInviteDeclined'] != True:
+							#datetime.datetime.strptime( order[u"invite"][u"expiryDate"], "%Y-%m-%dT%H:%M:%S" )
+							pending += 1;
+					if my_order[u'child'][u'birthCertificate'][u'number'] == order[u'child'][u'birthCertificate'][u'number'] and\
+						my_order[u'registrationNumber'] == order[u'registrationNumber']:
+					
+						return [True, current_kg_id, year, age, index, order, accepted, pending]
 
-	return False, None, None, None, None
+	return [False, current_kg_id]
 
 def setup_logging_in_chald_process(logs_params):
 	logging.basicConfig(**logs_params)
@@ -184,9 +195,7 @@ def find_child_place_in_kg(req):
 		for age, orders_by_queue_number in orders_for_age.iteritems():
 			orders_log += u"\t\t{age} років, кількість заявок {orders_num}\n".format(age=str(age), orders_num=len(orders_by_queue_number))
 	log_debug("find_child_place_in_kg" ,u"fetched orders:\n%s", orders_log)
-	is_found, found_year, found_age, found_index, order  = find_order_in_kg_orders(my_order, orders_for_year_and_age)
-
-	return is_found, kg_id, found_year, found_age, found_index, order
+	return find_order_in_kg_orders(my_order, orders_for_year_and_age, kg_id)
 
 def kg_info_as_tuple(kg_id):
 	return (kg_id, get_kg_info(kg_id))
@@ -206,26 +215,67 @@ def try_format_list(list_fmt_str, *args, **kwargs):
         results += [try_format(tmpl, *args, **kwargs)]
     return results 
 
+def try_format_list_with_format_spec(list_fmt_str, list_fmt_spec, *args, **kwargs):
+    results = []
+    list_fmt_spec += [{}] *(len(list_fmt_str) - len(list_fmt_spec))
+    for tmpl, fmt_spec in zip(list_fmt_str, list_fmt_spec):
+        kwargs.update(fmt_spec)
+        results += [try_format(tmpl, *args, **kwargs)]
+    return results
+
+
+def guess_format_spec_from_header(cols_format, **header_dict):
+    cols_format_spec = []
+    for col_fmt in cols_format:
+        if 'align' in col_fmt:
+            rendered_col = try_format(col_fmt, width=0, align='<', **header_dict)
+            cols_format_spec += [{'width':len(rendered_col), 'align':'<' }]
+        else:
+            rendered_col = try_format(col_fmt, width=0, **header_dict)
+            cols_format_spec += [{'width':len(rendered_col) }]
+    return cols_format_spec
+
 def main(opts, logs_params):
 	my_infos = get_my_orders(opts.email)
 	#kg_list=kg_list[1:2]
 	delim = u'|'
-	fields_format = [u'{order_number:17}',
-		u'{order_status:21}',
-		u'{kg_infos[number]:14}',
-		u'{kg_infos[name]:40}',
-		u'{yearFromTo:14}',
-		u'{ageFromTo:8}',
-		u'{place:2}']
+	header_dict = { 
+		  'order_number':u'Заявка №'
+		, 'order_status':u'Статус заявки'
+		, 'kg_infos':{'number':u'Номер садочка', 'name':u'Назва садочка'}
+		, 'yearFromTo':u'Навчальний рік'
+		, 'ageFromTo':u'Группа'
+		, 'place':u'Місце в черзі' 
+		, 'accepted':u'Прийняті' 
+		, 'pending':u'Запрошенні' 
+	}
+	cols_format = [
+	      u'{order_number:17}'
+	    , u'{order_status:{align}{width}}'
+	    , u'{kg_infos[number]:{align}{width}}'
+	    , u'{kg_infos[name]:<40}'
+	    , u'{yearFromTo:{align}{width}}'
+	    , u'{ageFromTo:{align}{width}}'
+	    , u'{place:{align}{width}}'
+	    , u'{accepted:{align}{width}}'
+	    , u'{pending:{align}{width}}'
+	]
+
+
+		#       u'{order_number:17}'
+		# , u'{order_status:21}'
+		# , u'{kg_infos[number]:14}'
+		# , u'{kg_infos[name]:40}'
+		# , u'{yearFromTo:14}'
+		# , u'{ageFromTo:8}'
+		# , u'{place:13}'
+		# , u'{inactive:37}'
+    
+	cols_format_spec = guess_format_spec_from_header(cols_format, **header_dict )
+
 	if opts.tabulated:
-		fields_dict = { 'order_number':u'Заявка №'
-						, 'order_status':u'Статус заявки'
-						, 'kg_infos':{'number':u'Номер садочка', 'name':u'Назва садочка'}
-						, 'yearFromTo':u'Навчальний рік'
-						, 'ageFromTo':u'Группа'
-						, 'place':u'Місце в черзі' }
-		fields = try_format_list(fields_format, **fields_dict ) 
-		header = delim.join(fields)
+		headers = try_format_list_with_format_spec(cols_format, cols_format_spec, **header_dict ) 
+		header = delim.join(headers)
 		print(header)
 		print(u'-'*len(header))
 	for reg, info in my_infos.iteritems():
@@ -253,10 +303,10 @@ def main(opts, logs_params):
 			
 			search_results = requests_pool.map(find_child_place_in_kg, mapped_kg_find_requests )
 			#requests_poll.join()
-			kg_infos = dict(requests_pool.map(kg_info_as_tuple, [kg_id for res, kg_id, _, _, _, _ in search_results if res ] ))
+			kg_infos = dict(requests_pool.map(kg_info_as_tuple, [res[1] for res in search_results if res[0] ] ))
 		if not opts.tabulated:
 			print(u'Заявка №{0} [{1}]'.format(reg, order_status_s))
-		for res, kg_id, year, age, idx, order in search_results:
+		for res, kg_id, year, age, idx, order, accepted, pending in search_results:
 			if res:
 				#kg_info, active = get_kg_info(kg_id);
 				if not opts.tabulated:
@@ -269,25 +319,28 @@ def main(opts, logs_params):
 					 	, idx)) 
 				else:
 
-					fields_dict = {
+					row_dict = {
 						'order_number':reg
 						, 'order_status':order_status_s
 						, 'kg_infos':kg_infos[kg_id][0]
 						, 'yearFromTo':"%d-%d"%(year, order[u'periodTo'])
 						, 'ageFromTo':"%d-%d"%(age, order[u'ageLimitTo'])
-						, 'place':idx }
+						, 'place':idx 
+						, 'accepted':accepted
+						, 'pending':pending
+						}
 
-					fields = try_format_list(fields_format, **fields_dict ) 
-					print delim.join(fields)
+					row = try_format_list_with_format_spec(cols_format, cols_format_spec, **row_dict ) 
+					print delim.join(row)
 		if not opts.tabulated:
 			print('')
 
 if __name__ == "__main__":
-	parser = argparse.ArgumentParser(description=u'Знайти місце дитини у чергах зареестрованних садочків')
-	parser.add_argument('email', default='igokos@gmail.com',nargs='?', help=u'електронна пошта на яку зареестрованна дитина')
-	parser.add_argument('-v',  dest='verbosity', default=0, action='count', help='verbocity level')
-	parser.add_argument('-n',  dest='my_orders_only', default=False, action='store_true', help='')
-	parser.add_argument('-t',  dest='tabulated', default=False, action='store_true', help='')
+	parser = argparse.ArgumentParser(description=_("utility to fetch the place in the line of kindergardens of registered child"))
+	parser.add_argument('email', help=_("registered emails"))
+	parser.add_argument('-v',  dest='verbosity', default=0, action='count', help=_('verbosity level'))
+	parser.add_argument('-n',  dest='my_orders_only', default=False, action='store_true', help=_("load only orders, without places in line"))
+	parser.add_argument('-t',  dest='tabulated', default=False, action='store_true', help=_("tabled output"))
 	logging_presets = {
 		0:{'format':'%(message)s', 'level':logging.WARNING},
 		1:{'format':'[%(name)s] %(message)s', 'level':logging.INFO},
