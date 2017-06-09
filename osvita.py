@@ -191,14 +191,48 @@ def find_child_place_in_kg(req):
 def kg_info_as_tuple(kg_id):
 	return (kg_id, get_kg_info(kg_id))
 
+def try_format(fmt_str, *args, **kwargs):
+    result = ''
+    try:
+        result = fmt_str.format(*args, **kwargs)
+    except (IndexError, KeyError, ValueError ) as e:
+        pass
+    finally:
+        return result 
+
+def try_format_list(list_fmt_str, *args, **kwargs):
+    results = []
+    for tmpl in list_fmt_str:
+        results += [try_format(tmpl, *args, **kwargs)]
+    return results 
+
 def main(opts, logs_params):
 	my_infos = get_my_orders(opts.email)
 	#kg_list=kg_list[1:2]
+	delim = u'|'
+	fields_format = [u'{order_number:17}',
+		u'{order_status:21}',
+		u'{kg_infos[number]:14}',
+		u'{kg_infos[name]:40}',
+		u'{yearFromTo:14}',
+		u'{ageFromTo:8}',
+		u'{place:2}']
+	if opts.tabulated:
+		fields_dict = { 'order_number':u'Заявка №'
+						, 'order_status':u'Статус заявки'
+						, 'kg_infos':{'number':u'Номер садочка', 'name':u'Назва садочка'}
+						, 'yearFromTo':u'Навчальний рік'
+						, 'ageFromTo':u'Группа'
+						, 'place':u'Місце в черзі' }
+		fields = try_format_list(fields_format, **fields_dict ) 
+		header = delim.join(fields)
+		print(header)
+		print(u'-'*len(header))
 	for reg, info in my_infos.iteritems():
 		status_map = {
 			u"removed":u"видалена",
 			u"approved":u"підтверджена",
-			u"invite-sent":u"запрошення надіслане ",
+			u"invite-sent":u"запрошення надіслане",
 			u"need-check":u"перевіряеться"
 		}
 		my_order = info[0]
@@ -220,24 +254,40 @@ def main(opts, logs_params):
 			search_results = requests_pool.map(find_child_place_in_kg, mapped_kg_find_requests )
 			#requests_poll.join()
 			kg_infos = dict(requests_pool.map(kg_info_as_tuple, [kg_id for res, kg_id, _, _, _, _ in search_results if res ] ))
-		print(u'Заявка №{0} [{1}]'.format(reg, order_status_s))
+		if not opts.tabulated:
+			print(u'Заявка №{0} [{1}]'.format(reg, order_status_s))
 		for res, kg_id, year, age, idx, order in search_results:
 			if res:
 				#kg_info, active = get_kg_info(kg_id);
-				print(u'\tСадочок №{0[number]}: {0[name]} - Навчальний рiк {1}/{2} группа від {3} до {4} років, позиція у черзі {5}'.format(
-					kg_infos[kg_id][0]
-				 	, year
-				 	, order[u'periodTo']
-				 	, age
-				 	, order[u'ageLimitTo']
-				 	, idx)) 
-		print('')
+				if not opts.tabulated:
+					print(u'\tСадочок №{0[number]}: {0[name]} - Навчальний рiк {1}/{2} группа від {3} до {4} років, позиція у черзі {5}'.format(
+						kg_infos[kg_id][0]
+					 	, year
+					 	, order[u'periodTo']
+					 	, age
+					 	, order[u'ageLimitTo']
+					 	, idx)) 
+				else:
+
+					fields_dict = {
+						'order_number':reg
+						, 'order_status':order_status_s
+						, 'kg_infos':kg_infos[kg_id][0]
+						, 'yearFromTo':"%d-%d"%(year, order[u'periodTo'])
+						, 'ageFromTo':"%d-%d"%(age, order[u'ageLimitTo'])
+						, 'place':idx }
+
+					fields = try_format_list(fields_format, **fields_dict ) 
+					print delim.join(fields)
+		if not opts.tabulated:
+			print('')
 
 if __name__ == "__main__":
 	parser = argparse.ArgumentParser(description=u'Знайти місце дитини у чергах зареестрованних садочків')
 	parser.add_argument('email', default='igokos@gmail.com',nargs='?', help=u'електронна пошта на яку зареестрованна дитина')
 	parser.add_argument('-v',  dest='verbosity', default=0, action='count', help='verbocity level')
 	parser.add_argument('-n',  dest='my_orders_only', default=False, action='store_true', help='')
+	parser.add_argument('-t',  dest='tabulated', default=False, action='store_true', help='')
 	logging_presets = {
 		0:{'format':'%(message)s', 'level':logging.WARNING},
 		1:{'format':'[%(name)s] %(message)s', 'level':logging.INFO},
